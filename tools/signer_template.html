@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tfilon for Nokia 225 - sign for your SIM</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#ffffff; --fg:#1b2333; --muted:#5b6578; --accent:#1e3c82; --ok:#1b7a3a; --bad:#b3261e; --line:#d5d9e4; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151d; --card:#1b2030; --fg:#e8ebf4; --muted:#9aa5bd; --accent:#8fb0ff; --ok:#69d38a; --bad:#ff8a80; --line:#323a52; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-top:16px; }
+  p { margin:8px 0; } .muted { color:var(--muted); font-size:.92rem; }
+  label { display:block; font-weight:600; margin-bottom:6px; }
+  input[type=text], input[type=number] { width:100%; font:inherit; font-size:1.2rem; letter-spacing:.06em; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  input:focus-visible, button:focus-visible, summary:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+  button { font:inherit; font-weight:600; padding:12px 18px; border-radius:10px; border:0; background:var(--accent); color:#fff; cursor:pointer; margin-top:12px; }
+  @media (prefers-color-scheme: dark) { button { color:#0b1020; } }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #hint { min-height:1.4em; font-size:.92rem; margin-top:6px; color:var(--muted); }
+  #hint.ok { color:var(--ok); } #hint.bad { color:var(--bad); }
+  #result { margin-top:14px; } #result.ok { color:var(--ok); } #result.bad { color:var(--bad); }
+  details { margin-top:12px; } summary { cursor:pointer; font-weight:600; }
+  code { background:var(--bg); padding:1px 5px; border-radius:4px; }
+  ol, ul { padding-left:1.2rem; margin:8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tfilon for MRE &ndash; sign it for your SIM</h1>
+  <p class="muted">Nokia Series 30+ phones (225, 220, 215, 5310 ...) only run an MRE app (<code>.vxp</code>) that carries the IMSI of the SIM card inside the phone. Type your IMSI and this page builds your personal <code>Tfilon.vxp</code>. Everything happens inside this page: nothing is uploaded and no internet connection is needed.</p>
+
+  <section class="card">
+    <label for="imsi">IMSI of the SIM in the phone (15 digits)</label>
+    <input id="imsi" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" maxlength="16" placeholder="for example 425010123456789">
+    <div id="hint" aria-live="polite"></div>
+    <button id="go" type="button" disabled>Create Tfilon.vxp</button>
+    <div id="result" role="status" aria-live="polite"></div>
+  </section>
+
+  <section class="card">
+    <strong>Then</strong>
+    <ol>
+      <li>Copy the downloaded file to the phone or its memory card (the <code>MRE</code> folder is the usual place).</li>
+      <li>Open it from the phone&rsquo;s file manager (or the Apps menu).</li>
+    </ol>
+    <p class="muted">The file only works with the SIM whose IMSI you entered. With a different SIM, create a new file here (it takes a few seconds).</p>
+
+    <details>
+      <summary>Where do I find my IMSI?</summary>
+      <ul>
+        <li>The easiest way reported by the MRE community: put the SIM into an Android phone and read it there &ndash; some phones show it under Settings &rarr; About phone &rarr; Status, otherwise use any &ldquo;SIM info&rdquo; app.</li>
+        <li>With USB debugging on, <code>adb shell service call iphonesubinfo 1</code> prints it (the digits are spread over the output).</li>
+        <li>Your mobile operator can also tell you.</li>
+        <li>It is <b>not</b> the IMEI (the phone&rsquo;s serial number) and not the number printed on the SIM card. On a dual-SIM phone use the SIM in slot 1 (the community advice) &ndash; if that does not start the app, try the other SIM.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Advanced</summary>
+      <p><label for="ram">Memory request in KB (leave as is unless the phone says it is out of memory; try 768)</label>
+      <input id="ram" type="number" min="256" max="4096" step="64" value="1024"></p>
+      <p><label for="other">Sign a different .vxp instead of Tfilon (any MRE app)</label>
+      <input id="other" type="file" accept=".vxp"></p>
+    </details>
+  </section>
+  <p class="muted">Tfilon &copy; Uri Hollander (tfilon.com), freely distributable without charge. This is an unofficial port for the MediaTek MRE platform.</p>
+</main>
+
+<script>
+"use strict";
+const VXP_B64 = "__VXP_B64__";
+
+/* ---------- pure logic (no DOM) ---------- */
+function b64ToBytes(b64) {
+  const s = atob(b64), u = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+  return u;
+}
+function findTags(bytes) {
+  const n = bytes.length;
+  if (n < 64 || bytes[0] !== 0x7f || bytes[1] !== 0x45 || bytes[2] !== 0x4c || bytes[3] !== 0x46) throw new Error("This is not an MRE .vxp file.");
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const tagsPos = dv.getUint32(n - 12, true);
+  if (tagsPos <= 0 || tagsPos >= n - 12) throw new Error("The tag table of this file is damaged.");
+  const found = {};
+  let pos = tagsPos;
+  for (;;) {
+    if (pos + 8 > n) throw new Error("The tag table of this file is damaged.");
+    const id = dv.getUint32(pos, true), len = dv.getUint32(pos + 4, true);
+    if (id === 0) break;
+    found[id] = { pos: pos, len: len };
+    pos += 8 + len;
+  }
+  return found;
+}
+function normaliseImsi(text) {
+  let t = String(text).replace(/\s+/g, "");
+  if (!/^[0-9]+$/.test(t)) throw new Error("The IMSI must contain digits only.");
+  if (t.length === 16 && t[0] === "9") t = t.slice(1);          // already prefixed with 9
+  if (t.length !== 15) throw new Error("The IMSI must be 15 digits (you typed " + t.length + ").");
+  return t;
+}
+/* returns a new Uint8Array: IMSI tag (0x12) rewritten as "9" + 15 digits (16 bytes, no terminator) */
+function patchVxp(bytes, imsi15, ramKb) {
+  const tags = findTags(bytes);
+  const t = tags[0x12];
+  if (!t) throw new Error("This .vxp has no IMSI tag, so it cannot be signed.");
+  const src = new Uint8Array(bytes);                              // copy
+  if (ramKb && tags[0x0f]) new DataView(src.buffer).setUint32(tags[0x0f].pos + 8, ramKb >>> 0, true);
+  const body = "9" + imsi15, tag = new Uint8Array(8 + body.length), dv = new DataView(tag.buffer);
+  dv.setUint32(0, 0x12, true); dv.setUint32(4, body.length, true);
+  for (let i = 0; i < body.length; i++) tag[8 + i] = body.charCodeAt(i);
+  const out = new Uint8Array(src.length - (8 + t.len) + tag.length);
+  out.set(src.subarray(0, t.pos), 0);
+  out.set(tag, t.pos);
+  out.set(src.subarray(t.pos + 8 + t.len), t.pos + tag.length);
+  return out;
+}
+
+/* ---------- page wiring ---------- */
+if (typeof document !== "undefined") {
+  const $ = (id) => document.getElementById(id);
+  const imsiEl = $("imsi"), goEl = $("go"), hintEl = $("hint"), resEl = $("result"), ramEl = $("ram"), otherEl = $("other");
+  function validate() {
+    const t = imsiEl.value.replace(/\s+/g, "");
+    let ok = false;
+    hintEl.className = "";
+    if (t.length === 0) hintEl.textContent = "";
+    else if (!/^[0-9]*$/.test(t)) hintEl.textContent = "Digits only, please.", hintEl.className = "bad";
+    else if (t.length < 15) hintEl.textContent = t.length + " of 15 digits";
+    else if (t.length === 15 || (t.length === 16 && t[0] === "9")) ok = true, hintEl.textContent = "15 digits \u2713", hintEl.className = "ok";
+    else hintEl.textContent = "Too long - an IMSI has 15 digits.", hintEl.className = "bad";
+    goEl.disabled = !ok;
+    return ok;
+  }
+  function saveFile(name, bytes) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 20000);
+  }
+  async function build() {
+    resEl.className = ""; resEl.textContent = "";
+    try {
+      const imsi = normaliseImsi(imsiEl.value);
+      let bytes, name = "Tfilon.vxp";
+      const f = otherEl.files && otherEl.files[0];
+      if (f) { bytes = new Uint8Array(await f.arrayBuffer()); name = f.name.replace(/\.vxp$/i, "") + "_signed.vxp"; }
+      else bytes = b64ToBytes(VXP_B64);
+      const ram = parseInt(ramEl.value, 10);
+      const out = patchVxp(bytes, imsi, ram > 0 ? ram : 0);
+      saveFile(name, out);
+      resEl.className = "ok";
+      resEl.textContent = "Done: " + name + " (" + out.length + " bytes) signed for the SIM ending in " + imsi.slice(-4) + ". If your browser did not start the download, press the button again.";
+    } catch (e) {
+      resEl.className = "bad"; resEl.textContent = String(e.message || e);
+    }
+  }
+  imsiEl.addEventListener("input", validate);
+  goEl.addEventListener("click", build);
+  imsiEl.addEventListener("keydown", function (e) { if (e.key === "Enter" && validate()) build(); });
+  validate();
+}
+</script>
+</body>
+</html>
